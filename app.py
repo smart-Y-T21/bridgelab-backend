@@ -3,7 +3,7 @@ import threading
 import asyncio
 from flask import Flask, jsonify
 from flask_cors import CORS
-from backend.price_engine import CLEAN_PRICE_CACHE, get_mark_price, start_price_engine
+from price_engine import CLEAN_PRICE_CACHE, get_mark_price, start_price_engine
 
 app = Flask(__name__)
 CORS(app)
