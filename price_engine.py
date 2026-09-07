@@ -1,10 +1,11 @@
 import asyncio
 import aiohttp
-from config import (
+from backend.config import (
     TWELVE_DATA_KEY, 
     TWELVE_DATA_STOCK_GROUPS, 
     TWELVE_DATA_HK_GROUPS, 
-    TWELVE_DATA_MACRO_GROUPS
+    TWELVE_DATA_MACRO_GROUPS,
+    TWELVE_DATA_EU_GROUPS,
 )
 
 # ==========================================
@@ -59,7 +60,13 @@ GLOBAL_PRICE_CACHE = {
     # 全球 ETF
     "SPY": 595.20, "QQQ": 518.40, "IWM": 232.10, "ARKK": 58.40,
     "GLD": 378.50, "EWJ": 72.10, "VGK": 68.20, "MCHI": 31.40,
-    "EWY": 58.20, "INDA": 56.40, "EWU": 36.50, "EWS": 25.80, "EWW": 65.20
+    "EWY": 58.20, "INDA": 56.40, "EWU": 36.50, "EWS": 25.80, "EWW": 65.20,
+    
+    # 欧股资产
+    "ASML": 920.50, "LVMH": 740.00, "RMS": 2150.00, "ROG": 285.20,
+    "NOVN": 98.40, "AZN": 124.50, "NOVO": 95.20, "NESN": 88.60,
+    "SIE": 178.40, "SAP": 215.40, "SHEL": 34.20, "TTE": 62.10,
+    "RACE": 410.00, "ALV": 275.50, "RHM": 580.00
 }
 
 CLEAN_PRICE_CACHE = GLOBAL_PRICE_CACHE
@@ -269,34 +276,108 @@ async def fetch_stocks_prices():
             
             await asyncio.sleep(5)
 
+
 # ==========================================
-# 🇭🇰 板块 5：常规港股通道
+# 🇭🇰 港股最终正确通道（exchange=HKEX + 标准前导零符号）
 # ==========================================
 async def fetch_hk_prices():
-    hk_mapping = {
-        "0001.HK": "00001", "0005.HK": "00005", "1299.HK": "01299",
-        "0700.HK": "00700", "3690.HK": "03690", "1810.HK": "01810",
-        "9988.HK": "09988", "0981.HK": "00981", "2015.HK": "02015",
-        "9888.HK": "09888", "0388.HK": "00388", "HSI": "HSI"
-    }
+    # 格式: (官方标准带前导零符号, 前端映射Key)
+    hk_targets = [
+        ("00001", "00001"),  # 长和
+        ("00005", "00005"),  # 汇丰控股
+        ("00388", "00388"),  # 香港交易所
+        ("00700", "00700"),  # 腾讯控股
+        ("00981", "00981"),  # 中芯国际
+        ("01299", "01299"),  # 友邦保险
+        ("01810", "01810"),  # 小米集团
+        ("03690", "03690"),  # 美团
+        ("09888", "09888"),  # 百度集团
+        ("09988", "09988")   # 阿里巴巴
+    ]
+
+    await asyncio.sleep(7)
+
     async with aiohttp.ClientSession() as session:
         while True:
-            for group in TWELVE_DATA_HK_GROUPS:
+            for symbol, target_key in hk_targets:
                 try:
-                    url = f"https://api.twelvedata.com/price?symbol={group}&apikey={TWELVE_DATA_KEY}"
-                    async with session.get(url, timeout=5) as resp:
+                    url = "https://api.twelvedata.com/price"
+                    params = {
+                        "symbol": symbol,
+                        "exchange": "HKEX",  # 👈 完美对齐官方数据库的 HKEX
+                        "apikey": TWELVE_DATA_KEY
+                    }
+                    async with session.get(url, params=params, timeout=4) as resp:
                         if resp.status == 200:
-                            hk_data = await resp.json()
-                            for symbol, val in hk_data.items():
-                                if isinstance(val, dict) and 'price' in val:
-                                    price_val = float(val['price'])
-                                    target_key = hk_mapping.get(symbol, symbol)
+                            data = await resp.json()
+                            if "code" in data and data.get("code") != 200:
+                                print(f"❌ [港股 API 报错] 代码: {symbol}, 原因: {data.get('message')}")
+                            elif "price" in data:
+                                price_val = float(data["price"])
+                                if price_val > 0:
+                                    GLOBAL_PRICE_CACHE[target_key] = price_val
+                                    print(f"🟢 [港股实时更新成功] {target_key} -> {price_val}")
+                        else:
+                            print(f"⚠️ [港股网络异常] 代码: {symbol}, HTTP状态码: {resp.status}")
+                except Exception as e:
+                    print(f"⚠️ [港股请求异常] 代码: {symbol}, 详情: {e}")
+                
+                await asyncio.sleep(0.4)
+            
+            # 整轮更新完毕后休息 20 秒
+            await asyncio.sleep(20)
+
+# ==========================================
+# 🇪🇺 欧股独立隔离通道（完美参数分离版，绝对不影响 BTC）
+# ==========================================
+
+async def fetch_eu_prices():
+    # 使用 Twelve Data 文档推荐的 mic_code（市场标识码）进行精确查验
+    # 格式: (股票代码, 市场标识码 mic_code, 前端映射Key)
+    eu_targets = [
+        ("ASML",   "XAMS",     "ASML"),
+        ("MC",     "XPAR",     "LVMH"),
+        ("RMS",    "XPAR",     "RMS"),
+        ("ROG.SW", "",         "ROG"),     # 罗氏：改用 .SW 后缀直查
+        ("NOVN",   "XSWX",     "NOVN"),
+        ("AZN.L",  "",         "AZN"),     # 阿斯利康：改用 .L 后缀直查（伦敦）
+        ("NOVO-B.CO", "",      "NOVO"),    # 诺和诺德：改用 .CO 后缀直查（哥本哈根）
+        ("NESN",   "XSWX",     "NESN"),
+        ("SIE",    "XETR",     "SIE"),
+        ("SAP",    "XETR",     "SAP"),
+        ("SHEL.L", "",         "SHEL"),    # 壳牌：改用 .L 后缀直查（伦敦主挂牌）
+        ("TTE",    "XPAR",     "TTE"),
+        ("RACE.MI","",         "RACE"),    # 法拉利：改用 .MI 后缀直查（米兰）
+        ("ALV",    "XETR",     "ALV"),
+        ("RHM",    "XETR",     "RHM")
+    ]
+
+    await asyncio.sleep(5)
+
+    async with aiohttp.ClientSession() as session:
+        while True:
+            for symbol, mic, target_key in eu_targets:
+                try:
+                    url = "https://api.twelvedata.com/price"
+                    params = {
+                        "symbol": symbol,
+                        "mic_code": mic,  # 👈 严格按照官方文档使用 mic_code 参数
+                        "apikey": TWELVE_DATA_KEY
+                    }
+                    async with session.get(url, params=params, timeout=4) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            if "price" in data:
+                                price_val = float(data["price"])
+                                if price_val > 0:
                                     GLOBAL_PRICE_CACHE[target_key] = price_val
                 except Exception:
                     pass
-                await asyncio.sleep(0.3)
-            await asyncio.sleep(6)
-
+                
+                await asyncio.sleep(0.4)
+            
+            await asyncio.sleep(20)
+            
 # ==========================================
 # 🌐 板块 6：宏观资产通道
 # ==========================================
@@ -345,6 +426,7 @@ async def start_price_engine():
         fetch_stocks_prices(),
         fetch_hk_prices(),
         fetch_macro_prices(),
+        fetch_eu_prices(),
         update_mark_prices_loop()
     )
 

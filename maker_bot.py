@@ -1,8 +1,8 @@
 import asyncio
 import random
 from web3 import Web3
-from config import WEB3_PROVIDER_URI, CONTRACT_ADDRESS, CONTRACT_ABI
-from price_engine import get_mark_price
+from backend.config import WEB3_PROVIDER_URI, CONTRACT_ADDRESS, CONTRACT_ABI
+from backend.price_engine import get_mark_price
 
 w3 = Web3(Web3.HTTPProvider(WEB3_PROVIDER_URI))
 contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
